@@ -3,7 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
@@ -36,7 +36,7 @@ app.get('/', (req, res) => {
   res.send('DevCode Backend is running!');
 });
 
-// Python execution route using child_process (uses python3 for Render/Linux)
+// Legacy non-interactive fallback execution route
 app.post('/api/execute', async (req, res) => {
   const { language, code } = req.body;
 
@@ -61,9 +61,59 @@ app.post('/api/execute', async (req, res) => {
 });
 
 const activeRooms = new Map(); // roomId -> Map of socket.id -> username
+const activeProcesses = {};    // socket.id -> { process, filePath }
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
+
+  // Run Python code interactively via Socket.io
+  socket.on('run-python', ({ roomId, code }) => {
+    // Kill existing process if user runs a new one
+    if (activeProcesses[socket.id]) {
+      try {
+        activeProcesses[socket.id].process.kill();
+        if (fs.existsSync(activeProcesses[socket.id].filePath)) {
+          fs.unlinkSync(activeProcesses[socket.id].filePath);
+        }
+      } catch (e) {}
+    }
+
+    const tempFilePath = path.join(__dirname, `temp_${socket.id}_${Date.now()}.py`);
+    fs.writeFileSync(tempFilePath, code);
+
+    // -u forces unbuffered Python stdout/stdin
+    const pyProcess = spawn('python3', ['-u', tempFilePath], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    activeProcesses[socket.id] = { process: pyProcess, filePath: tempFilePath };
+
+    pyProcess.stdout.on('data', (data) => {
+      socket.emit('python-output', { type: 'stdout', data: data.toString() });
+    });
+
+    pyProcess.stderr.on('data', (data) => {
+      socket.emit('python-output', { type: 'stderr', data: data.toString() });
+    });
+
+    pyProcess.on('close', (code) => {
+      socket.emit('python-output', { type: 'exit', data: `\n[Process exited with code ${code}]` });
+      if (activeProcesses[socket.id]) {
+        delete activeProcesses[socket.id];
+      }
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+    });
+  });
+
+  // Pipe user input from frontend into Python's stdin
+  socket.on('provide-python-input', ({ input }) => {
+    const procObj = activeProcesses[socket.id];
+    if (procObj && procObj.process) {
+      procObj.process.stdin.write(input + '\n');
+    }
+  });
 
   socket.on('draw-stroke', (data) => {
     if (data.roomId) {
@@ -134,15 +184,15 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('receive-message', chatData);
   });
 
- socket.on('end-session', async ({ roomId }) => {
-  io.to(roomId).emit('session-ended');
-  activeRooms.delete(roomId);
-  try {
-    await Room.findOneAndDelete({ roomId });
-  } catch (err) {
-    console.error('Error deleting room on session end:', err);
-  }
-});
+  socket.on('end-session', async ({ roomId }) => {
+    io.to(roomId).emit('session-ended');
+    activeRooms.delete(roomId);
+    try {
+      await Room.findOneAndDelete({ roomId });
+    } catch (err) {
+      console.error('Error deleting room on session end:', err);
+    }
+  });
 
   socket.on('check-room', ({ roomId }, callback) => {
     const room = io.sockets.adapter.rooms.get(roomId);
@@ -155,6 +205,17 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    // Clean up any running python process for this user
+    if (activeProcesses[socket.id]) {
+      try {
+        activeProcesses[socket.id].process.kill();
+        if (fs.existsSync(activeProcesses[socket.id].filePath)) {
+          fs.unlinkSync(activeProcesses[socket.id].filePath);
+        }
+      } catch (e) {}
+      delete activeProcesses[socket.id];
+    }
+
     activeRooms.forEach((users, roomId) => {
       if (users.has(socket.id)) {
         users.delete(socket.id);
