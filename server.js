@@ -47,17 +47,18 @@ app.post('/api/execute', async (req, res) => {
   const filePath = path.join(__dirname, `temp_${Date.now()}.py`);
   fs.writeFileSync(filePath, code);
 
-  exec(`python3 "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+  exec(`python3 "${filePath}"`, { timeout: 10000 }, (error, stdout, stderr) => {
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
 
-    if (error) {
-      return res.json({ output: stderr || error.message });
-    }
-    
-    res.json({ output: stdout || stderr || 'Program executed successfully (no output).' });
-  });
+  if (error) {
+    const errorMessage = stderr || error.stderr || error.message || 'Unknown execution error';
+    return res.json({ output: `Error:\n${errorMessage}` });
+  }
+
+  res.json({ output: stdout || stderr || 'Program executed successfully (no output).' });
+});
 });
 
 const activeRooms = new Map(); // roomId -> Map of socket.id -> username
