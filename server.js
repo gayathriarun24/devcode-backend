@@ -134,9 +134,15 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('receive-message', chatData);
   });
 
-  socket.on('end-session', ({ roomId }) => {
-    io.to(roomId).emit('session-ended');
-  });
+ socket.on('end-session', async ({ roomId }) => {
+  io.to(roomId).emit('session-ended');
+  activeRooms.delete(roomId);
+  try {
+    await Room.findOneAndDelete({ roomId });
+  } catch (err) {
+    console.error('Error deleting room on session end:', err);
+  }
+});
 
   socket.on('check-room', ({ roomId }, callback) => {
     const room = io.sockets.adapter.rooms.get(roomId);
