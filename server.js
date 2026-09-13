@@ -14,14 +14,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["https://devcode-24.netlify.app", "http://localhost:5173"],
+    origin: ["https://devcode-24.netlify.app", "http://localhost:5173", "http://localhost:3000"],
     methods: ["GET", "POST"],
     credentials: true
   }
 });
 
 app.use(cors({
-  origin: ["https://devcode-24.netlify.app", "http://localhost:5173"],
+  origin: ["https://devcode-24.netlify.app", "http://localhost:5173", "http://localhost:3000"],
   credentials: true
 }));
 app.use(express.json());
@@ -36,7 +36,7 @@ app.get('/', (req, res) => {
   res.send('DevCode Backend is running!');
 });
 
-// Local Python execution route using child_process (No external APIs or keys needed)
+// Python execution route using child_process (uses python3 for Render/Linux)
 app.post('/api/execute', async (req, res) => {
   const { language, code } = req.body;
 
@@ -45,11 +45,9 @@ app.post('/api/execute', async (req, res) => {
   }
 
   const filePath = path.join(__dirname, `temp_${Date.now()}.py`);
-  
   fs.writeFileSync(filePath, code);
 
-  exec(`python "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
-    // Clean up temporary file
+  exec(`python3 "${filePath}"`, { timeout: 5000 }, (error, stdout, stderr) => {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
@@ -67,16 +65,18 @@ const activeRooms = new Map(); // roomId -> Map of socket.id -> username
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
+  socket.on('draw-stroke', (data) => {
+    if (data.roomId) {
+      socket.to(data.roomId).emit('draw-stroke', data);
+    }
+  });
+
+  socket.on('clear-whiteboard', ({ roomId }) => {
+    socket.to(roomId).emit('clear-whiteboard');
+  });
+
   socket.on('join-room', async ({ roomId, username }) => {
     socket.join(roomId);
-
-    socket.on('draw-stroke', (data) => {
-      socket.to(data.roomId).emit('draw-stroke', data);
-    });
-
-    socket.on('clear-whiteboard', ({ roomId }) => {
-      socket.to(roomId).emit('clear-whiteboard');
-    });
 
     try {
       const room = await Room.findOne({ roomId });
@@ -111,7 +111,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('language-change', ({ roomId, language }) => {
-    socket.to(roomId).emit('update-language', language);
+    socket.to(roomId).emit('language-change', language);
   });
 
   socket.on('send-message', async ({ roomId, message, username }) => {
@@ -135,8 +135,18 @@ io.on('connection', (socket) => {
   });
 
   socket.on('end-session', ({ roomId }) => {
-  io.to(roomId).emit('session-ended');
-});
+    io.to(roomId).emit('session-ended');
+  });
+
+  socket.on('check-room', ({ roomId }, callback) => {
+    const room = io.sockets.adapter.rooms.get(roomId);
+    const roomExists = room && room.size > 0;
+    callback({ exists: roomExists });
+  });
+
+  socket.on('cursor-move', ({ roomId, position, username }) => {
+    socket.to(roomId).emit('update-cursor', { socketId: socket.id, position, username });
+  });
 
   socket.on('disconnect', () => {
     activeRooms.forEach((users, roomId) => {
@@ -148,17 +158,6 @@ io.on('connection', (socket) => {
     });
     console.log(`User disconnected: ${socket.id}`);
   });
-
-  socket.on('check-room', ({ roomId }, callback) => {
-  const room = io.sockets.adapter.rooms.get(roomId);
-  const roomExists = room && room.size > 0;
-  callback({ exists: roomExists });
-});
-
-  socket.on('cursor-move', ({ roomId, position, username }) => {
-    socket.to(roomId).emit('update-cursor', { socketId: socket.id, position, username });
-  });
-
 });
 
 const PORT = process.env.PORT || 5000;
