@@ -85,3 +85,5 @@ router.delete('/:roomId', async (req, res) => {
     res.status(500).json({ error: 'Server error while deleting room' });
   }
 });
+
+module.exports = router;
