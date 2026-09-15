@@ -48,20 +48,21 @@ app.post('/api/execute', async (req, res) => {
   fs.writeFileSync(filePath, code);
 
   exec(`python3 "${filePath}"`, { timeout: 10000 }, (error, stdout, stderr) => {
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
 
-  if (error) {
-    const errorMessage = stderr || error.stderr || error.message || 'Unknown execution error';
-    return res.json({ output: `Error:\n${errorMessage}` });
-  }
+    if (error) {
+      const errorMessage = stderr || error.stderr || error.message || 'Unknown execution error';
+      return res.json({ output: `Error:\n${errorMessage}` });
+    }
 
-  res.json({ output: stdout || stderr || 'Program executed successfully (no output).' });
-});
+    res.json({ output: stdout || stderr || 'Program executed successfully (no output).' });
+  });
 });
 
 const activeRooms = new Map(); // roomId -> Map of socket.id -> username
+const roomCodeMap = new Map(); // roomId -> latest live code string (FIXED: in-memory live code)
 const activeProcesses = {};    // socket.id -> { process, filePath }
 
 io.on('connection', (socket) => {
@@ -69,7 +70,6 @@ io.on('connection', (socket) => {
 
   // Run Python code interactively via Socket.io
   socket.on('run-python', ({ roomId, code }) => {
-    // Kill existing process if user runs a new one
     if (activeProcesses[socket.id]) {
       try {
         activeProcesses[socket.id].process.kill();
@@ -82,7 +82,6 @@ io.on('connection', (socket) => {
     const tempFilePath = path.join(__dirname, `temp_${socket.id}_${Date.now()}.py`);
     fs.writeFileSync(tempFilePath, code);
 
-    // -u forces unbuffered Python stdout/stdin
     const pyProcess = spawn('python3', ['-u', tempFilePath], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -108,7 +107,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Pipe user input from frontend into Python's stdin
   socket.on('provide-python-input', ({ input }) => {
     const procObj = activeProcesses[socket.id];
     if (procObj && procObj.process) {
@@ -129,22 +127,27 @@ io.on('connection', (socket) => {
   socket.on('join-room', async ({ roomId, username }) => {
     socket.join(roomId);
 
-    try {
-      const room = await Room.findOne({ roomId });
-
-      if (room) {
-        if (room.codeContent) {
-          socket.emit('update-code', room.codeContent);
+    // FIXED: Check in-memory live code first before falling back to MongoDB
+    if (roomCodeMap.has(roomId)) {
+      socket.emit('update-code', roomCodeMap.get(roomId));
+    } else {
+      try {
+        const room = await Room.findOne({ roomId });
+        if (room) {
+          if (room.codeContent) {
+            roomCodeMap.set(roomId, room.codeContent);
+            socket.emit('update-code', room.codeContent);
+          }
+          if (room.language) {
+            socket.emit('update-language', room.language);
+          }
+          if (room.messages) {
+            socket.emit('load-messages', room.messages);
+          }
         }
-        if (room.language) {
-          socket.emit('update-language', room.language);
-        }
-        if (room.messages) {
-          socket.emit('load-messages', room.messages);
-        }
+      } catch (err) {
+        console.error('Error fetching room code on join:', err);
       }
-    } catch (err) {
-      console.error('Error fetching room code on join:', err);
     }
 
     if (!activeRooms.has(roomId)) {
@@ -158,11 +161,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('code-change', ({ roomId, code }) => {
+    // FIXED: Store live code in roomCodeMap instead of undefined `rooms`
+    roomCodeMap.set(roomId, code);
     socket.to(roomId).emit('update-code', code);
   });
 
   socket.on('language-change', ({ roomId, language }) => {
-    socket.to(roomId).emit('language-change', language);
+    socket.to(roomId).emit('language-language' || 'language-change', language);
   });
 
   socket.on('send-message', async ({ roomId, message, username }) => {
@@ -188,6 +193,7 @@ io.on('connection', (socket) => {
   socket.on('end-session', async ({ roomId }) => {
     io.to(roomId).emit('session-ended');
     activeRooms.delete(roomId);
+    roomCodeMap.delete(roomId);
     try {
       await Room.findOneAndDelete({ roomId });
     } catch (err) {
@@ -206,7 +212,6 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    // Clean up any running python process for this user
     if (activeProcesses[socket.id]) {
       try {
         activeProcesses[socket.id].process.kill();
