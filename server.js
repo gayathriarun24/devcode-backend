@@ -207,11 +207,11 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('language-change', language);
   });
 
-  socket.on('send-message', async ({ roomId, message, username }) => {
+socket.on('send-message', async ({ roomId, message, username }) => {
     const chatData = {
       username: username || 'Anonymous',
       message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString() // Always a valid ISO string
     };
 
     try {
@@ -224,6 +224,7 @@ io.on('connection', (socket) => {
       console.error('Error saving message to DB:', err);
     }
 
+    // Broadcasts to ALL clients in the room (including the sender)
     io.to(roomId).emit('receive-message', chatData);
   });
 
