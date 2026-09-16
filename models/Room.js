@@ -17,3 +17,14 @@ const roomSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 module.exports = mongoose.model('Room', roomSchema);
+
+messages: [
+  {
+    username: String,
+    message: String,
+    time: {
+      type: Date,
+      default: Date.now
+    }
+  }
+]

@@ -124,30 +124,68 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('clear-whiteboard');
   });
 
+  // socket.on('join-room', async ({ roomId, username }) => {
+  //   socket.join(roomId);
+
+  //   // FIXED: Check in-memory live code first before falling back to MongoDB
+  //   if (roomCodeMap.has(roomId)) {
+  //     socket.emit('update-code', roomCodeMap.get(roomId));
+  //   } else {
+  //     try {
+  //       const room = await Room.findOne({ roomId });
+  //       if (room) {
+  //         if (room.codeContent) {
+  //           roomCodeMap.set(roomId, room.codeContent);
+  //           socket.emit('update-code', room.codeContent);
+  //         }
+  //         if (room.language) {
+  //           socket.emit('update-language', room.language);
+  //         }
+  //         if (room.messages) {
+  //           socket.emit('load-messages', room.messages);
+  //         }
+  //       }
+  //     } catch (err) {
+  //       console.error('Error fetching room code on join:', err);
+  //     }
+  //   }
+
+  //   if (!activeRooms.has(roomId)) {
+  //     activeRooms.set(roomId, new Map());
+  //   }
+  //   activeRooms.get(roomId).set(socket.id, username || 'Anonymous');
+
+  //   const roomUsers = Array.from(activeRooms.get(roomId).values());
+  //   io.to(roomId).emit('room-users', roomUsers);
+  //   console.log(`User ${username} joined room: ${roomId}`);
+  // });
+
   socket.on('join-room', async ({ roomId, username }) => {
     socket.join(roomId);
 
-    // FIXED: Check in-memory live code first before falling back to MongoDB
+    // Emit live code if in memory
     if (roomCodeMap.has(roomId)) {
       socket.emit('update-code', roomCodeMap.get(roomId));
-    } else {
-      try {
-        const room = await Room.findOne({ roomId });
-        if (room) {
-          if (room.codeContent) {
-            roomCodeMap.set(roomId, room.codeContent);
-            socket.emit('update-code', room.codeContent);
-          }
-          if (room.language) {
-            socket.emit('update-language', room.language);
-          }
-          if (room.messages) {
-            socket.emit('load-messages', room.messages);
-          }
+    }
+
+    // Always fetch room details from MongoDB so language and past messages load reliably
+    try {
+      const room = await Room.findOne({ roomId });
+      if (room) {
+        if (!roomCodeMap.has(roomId) && room.codeContent) {
+          roomCodeMap.set(roomId, room.codeContent);
+          socket.emit('update-code', room.codeContent);
         }
-      } catch (err) {
-        console.error('Error fetching room code on join:', err);
+        if (room.language) {
+          socket.emit('update-language', room.language);
+        }
+        // ✅ Send stored messages to the newly joined user
+        if (room.messages && room.messages.length > 0) {
+          socket.emit('load-messages', room.messages);
+        }
       }
+    } catch (err) {
+      console.error('Error fetching room info on join:', err);
     }
 
     if (!activeRooms.has(roomId)) {
@@ -159,7 +197,7 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('room-users', roomUsers);
     console.log(`User ${username} joined room: ${roomId}`);
   });
-
+  
   socket.on('code-change', ({ roomId, code }) => {
     // FIXED: Store live code in roomCodeMap instead of undefined `rooms`
     roomCodeMap.set(roomId, code);
@@ -174,7 +212,7 @@ io.on('connection', (socket) => {
     const chatData = {
       username: username || 'Anonymous',
       message,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+     timestamp: new Date().toISOString()
     };
 
     try {
