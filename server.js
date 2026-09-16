@@ -199,20 +199,19 @@ io.on('connection', (socket) => {
   });
   
   socket.on('code-change', ({ roomId, code }) => {
-    // FIXED: Store live code in roomCodeMap instead of undefined `rooms`
     roomCodeMap.set(roomId, code);
     socket.to(roomId).emit('update-code', code);
   });
 
   socket.on('language-change', ({ roomId, language }) => {
-    socket.to(roomId).emit('language-language' || 'language-change', language);
+    socket.to(roomId).emit('language-change', language);
   });
 
   socket.on('send-message', async ({ roomId, message, username }) => {
     const chatData = {
       username: username || 'Anonymous',
       message,
-     timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString()
     };
 
     try {
